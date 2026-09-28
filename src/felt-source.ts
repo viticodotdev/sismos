@@ -76,6 +76,10 @@ interface FeltState {
 }
 
 const state = new Map<string, FeltState>()
+/** true once the first pass has recorded baseline counts (startup flood guard). */
+let warmedUp = false
+/** Only alert on a NEW felt event when it is this fresh (hours). */
+const NEW_EVENT_AGE_HOURS = 48
 
 /** Query the felt service for events in a bbox that have at least 1 report. */
 async function queryFelt(bbox?: { minlatitude: number; maxlatitude: number; minlongitude: number; maxlongitude: number }): Promise<FeltEvent[]> {
@@ -147,10 +151,15 @@ export async function runFeltSource(opts: {
       const prev = state.get(e.unid)
       const now = Date.now()
 
-      // New event: first sighting, above the alert threshold.
+      // New event: first sighting above the alert threshold.
       if (!prev) {
         state.set(e.unid, { count: e.feltCount, lastAlertAt: 0 })
-        if (e.feltCount >= cfg.feltAlertAt) {
+        // Startup flood guard: on the first pass we only record baseline state,
+        // we do not alert on everything already in the felt catalog (a 6-day-old
+        // quake that predates the service is not news). After warm-up, only
+        // alert when the event time is recent.
+        const fresh = isFresh(e.eventTime)
+        if (warmedUp && fresh && e.feltCount >= cfg.feltAlertAt) {
           result.newEvents += 1
           result.alerts.push({ unid: e.unid, kind: "new", feltCount: e.feltCount, mag: e.mag, region: e.region, eventTime: e.eventTime })
         }
@@ -181,6 +190,8 @@ export async function runFeltSource(opts: {
     }
   }
 
+  warmedUp = true
+
   // Publish.
   for (const a of result.alerts) {
     try {
@@ -188,7 +199,7 @@ export async function runFeltSource(opts: {
         await publishNtfy(
           opts.ntfy,
           buildNtfyPayload({
-            title: a.kind === "jump" ? `Felt response climbing — ${a.region}` : `Felt by ${a.feltCount} — ${a.region}`,
+            title: a.kind === "jump" ? `${a.region} — felt climbing` : `${a.region} — felt response`,
             message: feltMessage(a),
             tags: ["felt", a.kind === "jump" ? "upload" : "new"],
             priority: a.feltCount >= 50 ? 4 : 3,
@@ -208,15 +219,32 @@ export async function runFeltSource(opts: {
 
 function feltMessage(a: FeltAlert): string {
   const mag = a.mag != null ? `M${a.mag.toFixed(1)}` : "no magnitude"
-  const when = a.eventTime ? new Date(a.eventTime).toLocaleString("en-US", { timeZone: "America/Santo_Domingo", dateStyle: "medium", timeStyle: "short" }) : "unknown"
-  const titleFact = a.kind === "jump" ? `Felt count climbing: ${a.prevCount ?? "?"} → ${a.feltCount}` : `Felt by ${a.feltCount} people`
+  const when = fmtTime(a.eventTime)
+  // Title carries the felt count + kind; the body fields must not repeat it.
+  const titleFact = a.kind === "jump" ? `${a.region} — felt climbing` : `${a.region} — felt`
   const fields: MarkdownField[] = [
-    { label: "Reported felt", value: `${a.feltCount} people` },
+    { label: "Felt by", value: `${a.feltCount} people` },
     { label: "Magnitude", value: mag },
-    { label: "Region", value: a.region },
     { label: "Time", value: when },
   ]
   if (a.kind === "jump") fields.push({ label: "Climb", value: `${a.prevCount ?? "?"} → ${a.feltCount}` })
   fields.push({ label: "Event", value: a.unid })
   return markdownMessage(titleFact, fields)
+}
+
+/** EMSC times arrive like "2026-09-28T10:44:59.090 UTC"; that " UTC" suffix is
+ * not valid ISO, so new Date() returns Invalid Date. Normalize to "Z" first. */
+function isFresh(raw: string): boolean {
+  const iso = (raw || "").trim().replace(/ UTC$/, "Z")
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return true // undated: err toward not dropping
+  return Date.now() - d.getTime() < NEW_EVENT_AGE_HOURS * 3_600_000
+}
+
+function fmtTime(raw: string): string {
+  if (!raw) return "unknown"
+  const iso = raw.trim().replace(/ UTC$/, "Z")
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return "unknown"
+  return d.toLocaleString("en-US", { timeZone: "America/Santo_Domingo", dateStyle: "medium", timeStyle: "short" })
 }
