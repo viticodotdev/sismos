@@ -15,7 +15,7 @@
  * stateless deployment.
  */
 
-import { buildNtfyPayload, markdownMessage, publishNtfy, type NtfyConfig } from "./ntfy"
+import { eventUrl, markdownMessage, publishNtfy, type NtfyConfig } from "./ntfy"
 import { eventMatchesRegion, type RegionDef } from "./regions"
 
 /** Build a ws-feed handle ({ start(), stop() }) backed by an in-memory WsFeed. */
@@ -229,7 +229,8 @@ export class WsFeed implements WsFeedHandle {
 
     if (!this.cfg.dryRun) {
       try {
-        await publishNtfy(this.cfg.ntfy, buildNtfyPayload(this.occurrencePayload(e)))
+const occ = this.occurrencePayload(e)
+        await publishNtfy(this.cfg.ntfy, occ.message, occ.opts)
       } catch (err) {
         this.onError(err)
         return { action: "create", unid: e.unid, published: false, skipped: "publish-error" }
@@ -254,7 +255,8 @@ export class WsFeed implements WsFeedHandle {
 
     if (!this.cfg.dryRun) {
       try {
-        await publishNtfy(this.cfg.ntfy, buildNtfyPayload(this.revisionPayload(e, prev, crossedFloor)))
+        const rev = this.revisionPayload(e, prev, crossedFloor)
+      await publishNtfy(this.cfg.ntfy, rev.message, rev.opts)
       } catch (err) {
         this.onError(err)
         return { action: "update", unid: e.unid, published: false, skipped: "publish-error" }
@@ -268,7 +270,6 @@ export class WsFeed implements WsFeedHandle {
     const region = e.flynn_region || "Unknown region"
     const title = `${magLabel(e.mag)} — ${region}`
     return {
-      title,
       message: markdownMessage(title, [
         { label: "Magnitude", value: e.mag === null ? "no magnitude" : `${e.mag.toFixed(1)}${e.magtype ? ` (${e.magtype})` : ""}` },
         { label: "Region", value: region },
@@ -277,9 +278,12 @@ export class WsFeed implements WsFeedHandle {
         { label: "Location", value: fmtLocation(e) },
         { label: "Event", value: e.unid },
       ]),
-      tags: ["earthquake"],
-      priority: e.mag !== null && e.mag >= 5 ? 4 : 3,
-      click: `https://www.seismicportal.eu/realtime.html#${e.unid}`,
+      opts: {
+        title,
+        tags: ["earthquake"],
+        priority: e.mag !== null && e.mag >= 5 ? 4 : 3,
+        click: eventUrl(e.unid),
+      },
     }
   }
 
@@ -287,16 +291,18 @@ export class WsFeed implements WsFeedHandle {
     const region = e.flynn_region || "Unknown region"
     const title = `${magLabel(e.mag)} revision — ${region}`
     return {
-      title,
       message: markdownMessage(title, [
         { label: "Magnitude", value: `${magLabel(prevMag)} → ${magLabel(e.mag)}${e.magtype ? ` (${e.magtype})` : ""}` },
         { label: "Region", value: region },
         { label: "Time", value: fmtTime(e.time) },
         { label: "Event", value: e.unid },
       ]),
-      tags: ["earthquake", crossedFloor ? "warning" : "revision"],
-      priority: e.mag !== null && e.mag >= 5 ? 4 : 3,
-      click: `https://www.seismicportal.eu/realtime.html#${e.unid}`,
+      opts: {
+        title,
+        tags: ["earthquake", crossedFloor ? "warning" : "revision"],
+        priority: e.mag !== null && e.mag >= 5 ? 4 : 3,
+        click: eventUrl(e.unid),
+      },
     }
   }
 }

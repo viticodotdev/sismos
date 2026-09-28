@@ -13,7 +13,7 @@
 
 import { queryEmscEvents, type EmscEvent } from "./emsc"
 import type { DedupeStore } from "./dedupe"
-import { buildNtfyPayload, publishNtfy, type NtfyConfig } from "./ntfy"
+import { buildNtfyPayload, eventUrl, publishNtfy, type NtfyConfig } from "./ntfy"
 import { eventMatchesRegion, resolveRegions, unionBbox, type RegionDef } from "./regions"
 
 export interface PollConfig {
@@ -106,16 +106,14 @@ export async function pollAndAlert(opts: {
       result.newEvents += 1
 
       if (!poll.dryRun) {
-        await publishNtfy(
-          opts.ntfy,
-          buildNtfyPayload({
-            title: eventTitle(e),
-            message: eventMessage(e, e.regions),
-            tags: ["earthquake"],
-            priority: e.mag != null && e.mag >= 5 ? 4 : 3,
-            click: `https://www.seismicportal.eu/realtime.html#${e.unid}`,
-          }),
-        )
+        const payload = buildNtfyPayload({
+          title: eventTitle(e),
+          message: eventMessage(e, e.regions),
+          tags: ["earthquake"],
+          priority: e.mag != null && e.mag >= 5 ? 4 : 3,
+          click: eventUrl(e.unid),
+        })
+        await publishNtfy(opts.ntfy, payload.message, payload.opts)
       }
       await opts.dedupe.markSeen(e.unid)
       result.published += 1

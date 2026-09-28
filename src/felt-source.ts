@@ -18,7 +18,7 @@
  */
 
 import type { MarkdownField, NtfyConfig } from "./ntfy"
-import { buildNtfyPayload, markdownMessage, publishNtfy } from "./ntfy"
+import { eventUrl, markdownMessage, publishNtfy } from "./ntfy"
 import { unionBbox, type RegionDef } from "./regions"
 
 const FELT_URL = "https://www.seismicportal.eu/testimonies-ws/api/search"
@@ -196,16 +196,19 @@ export async function runFeltSource(opts: {
   for (const a of result.alerts) {
     try {
       if (!cfg.dryRun) {
-        await publishNtfy(
-          opts.ntfy,
-          buildNtfyPayload({
-            title: a.kind === "jump" ? `${a.region} — felt climbing` : `${a.region} — felt response`,
-            message: feltMessage(a),
-            tags: ["felt", a.kind === "jump" ? "upload" : "new"],
-            priority: a.feltCount >= 50 ? 4 : 3,
-            click: `https://www.seismicportal.eu/realtime.html#${a.unid}`,
-          }),
-        )
+        const payload = {
+          title: a.kind === "jump" ? `${a.region} — felt climbing` : `${a.region} — felt response`,
+          message: feltMessage(a),
+          tags: ["felt", a.kind === "jump" ? "upload" : "new"],
+          priority: a.feltCount >= 50 ? 4 : 3,
+          click: eventUrl(a.unid),
+        }
+        await publishNtfy(opts.ntfy, payload.message, {
+          title: payload.title,
+          tags: payload.tags,
+          priority: payload.priority,
+          click: payload.click,
+        })
       }
     } catch (err) {
       result.errors.push(`${a.unid} publish: ${err instanceof Error ? err.message : String(err)}`)
