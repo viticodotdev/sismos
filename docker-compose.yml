@@ -1,0 +1,43 @@
+# Self-host on Coolify / any Docker host. No public domain required: the
+# service reaches EMSC and your ntfy server outbound, and only needs
+# the internal port. SELF_POLL=true makes the container poll on its own
+# interval, so an external cron service is not needed.
+#
+# Usage:
+#   cp .env.example .env   # fill in NTFY_* (REGIONS/MIN_MAGNITUDE optional)
+#   docker compose up -d
+#
+# Coolify: add this repo as a Docker Compose deployment; set your env vars in
+# the Coolify UI (or in this file). No domain / proxy rewrite needed.
+
+services:
+  seismic-portal:
+    build: .
+    image: seismicportal-ntfy:latest
+    container_name: seismicportal-ntfy
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Overrides that are safe as compose defaults (env_file wins when set). 
+      PORT: "3000"
+      # Self-poll: the container drives its own cadence; no external cron.
+      SELF_POLL: "true"
+      POLL_INTERVAL_MINUTES: "5"
+      # Ship real alerts by default in the container; flip to "1" to test.
+      DRY_RUN: "0"
+    ports:
+      # Internal only. No public exposure — reach it over your overlay (e.g.
+      # NetBird wireguard) at http://<host>:3000/health.
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
