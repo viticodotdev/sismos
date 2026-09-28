@@ -31,15 +31,23 @@ Selectable, defined in `src/regions.ts` (extend the catalog there):
 `all` is the pipeline-proving mode: on a quiet DR day it still fetches events
 from anywhere, so you can confirm fetch → filter → publish all work.
 
-## Felt reports (escalation)
+## Two independent sources
 
-For each passing event the poller asks EMSC's Testimonies service how many
-people reported feeling it, and escalates the alert when people actually did:
-a M4.8 felt by 464 people is a different notification than one nobody noticed.
-An event with `ev_nbtestimonies >= FELT_ESCALATE_AT` gets a `⚠ HIGH FELT`
-banner and ntfy priority 4; the felt count is appended to the message as
-`Felt by: N people`. The felt lookup is best-effort — if it fails the base
-alert still goes out.
+The service treats the realtime feed and EMSC's felt reports as two separate
+sources of truth, each able to fire its own alert rather than one modifying the
+other.
+
+**Feed** — fires when a new quake happens in a region (occurrence). This is the
+REST poll that checks the origin-time window each tick.
+
+**Felt** — fires on human response, which moves on its own:
+- *new felt event*: a quake people report feeling (`ev_nbtestimonies >= FELT_ALERT_AT`)
+  — catches quakes the feed missed (under the magnitude floor) — ntfy tag `felt`
+- *jump*: an event's felt count climbs by `>= FELT_JUMP_BY` since last seen —
+  escalating impact; ntfy tag `felt` + `upload`
+
+The felt count is sent with ntfy priority 4 once it passes 50 reports. The felt
+lookup is best-effort; a failure never blocks the feed alert.
 
 ## API
 
@@ -62,7 +70,9 @@ NTFY_TOPIC=earthquakes-dr
 NTFY_ACCESS_TOKEN=                        # optional; empty for anonymous publish
 REGIONS=dr                                # default regions on cron (or "all")
 MIN_MAGNITUDE=0                           # default floor
-FELT_ESCALATE_AT=20                       # escalate once felt by N people (0 = off)
+FELT_ALERT_AT=5                            # alert on a new felt event at >= N reports
+FELT_JUMP_BY=15                            # felt-count climb that triggers a jump alert
+FELT_COOLDOWN_MIN=30                       # min between repeat alerts for the same event
 ```
 
 Exactly one trade, and it's deliberate: the default window (5 min) equals the
