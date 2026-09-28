@@ -67,3 +67,35 @@ describe("dedupeInMemory", () => {
     expect(await store.seen("20260928_0000107")).toBe(false)
   })
 })
+
+
+describe("feltCountForEvent", () => {
+  test("parses the felt count from a matching event", async () => {
+    const { feltCountForEvent } = await import("../src/felt")
+    // stub the global fetch to return the real API shape we validated live
+    const orig = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify([{ ev_unid: "20260927_0000285", ev_nbtestimonies: 464 }]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })) as unknown as typeof fetch
+    try {
+      const n = await feltCountForEvent("20260927_0000285")
+      expect(n).toBe(464)
+    } finally {
+      globalThis.fetch = orig
+    }
+  })
+
+  test("returns 0 for an event with no felt reports (204)", async () => {
+    const { feltCountForEvent } = await import("../src/felt")
+    const orig = globalThis.fetch
+    globalThis.fetch = (async () => new Response(null, { status: 204 })) as unknown as typeof fetch
+    try {
+      const n = await feltCountForEvent("20260928_0000106")
+      expect(n).toBe(0)
+    } finally {
+      globalThis.fetch = orig
+    }
+  })
+})

@@ -12,12 +12,16 @@ import { queryEmscEvents, type EmscEvent } from "./emsc"
 import type { DedupeStore } from "./dedupe"
 import { buildNtfyPayload, publishNtfy, type NtfyConfig } from "./ntfy"
 import { eventMatchesRegion, resolveRegions, unionBbox, type RegionDef } from "./regions"
+import { feltCountForEvent } from "./felt"
 
 export interface PollConfig {
   windowMinutes: number
   minMagnitude: number
   regions: RegionDef[] | "all"
   dryRun: boolean
+  /** Alert priority bumps to high (4) once a qualifying event is felt by this
+   * many people. 0 = disable felt escalation entirely. */
+  feltEscalateAt: number
 }
 
 export const DEFAULT_POLL_CONFIG: PollConfig = {
@@ -25,6 +29,7 @@ export const DEFAULT_POLL_CONFIG: PollConfig = {
   minMagnitude: 0,
   regions: "all",
   dryRun: false,
+  feltEscalateAt: 20,
 }
 
 export interface PollResult {
@@ -34,7 +39,7 @@ export interface PollResult {
   published: number
   failed: number
   errors: string[]
-  events: Array<EmscEvent & { published: boolean; regions: string[] }>
+  events: Array<EmscEvent & { published: boolean; regions: string[]; feltCount?: number }>
 }
 
 function toIso(offsetMinutes: number): string {
@@ -46,7 +51,7 @@ function eventTitle(e: EmscEvent): string {
   return `${mag} — ${e.flynn_region}`
 }
 
-function eventMessage(e: EmscEvent, regionLabels: string[]): string {
+function eventMessage(e: EmscEvent, regionLabels: string[], feltCount?: number): string {
   const depth = e.depth != null ? `${e.depth.toFixed(1)} km deep` : "depth unknown"
   const when = new Date(e.time).toLocaleString("en-US", {
     timeZone: "America/Santo_Domingo",
@@ -54,11 +59,13 @@ function eventMessage(e: EmscEvent, regionLabels: string[]): string {
     timeStyle: "short",
   })
   const where = regionLabels.length > 0 ? `Matches: ${regionLabels.join(", ")}` : "No region match (blanket mode)"
+  const felt = feltCount != null && feltCount > 0 ? `Felt by: ${feltCount} people` : "Not reported felt"
   return [
     `Time: ${when} (Santo Domingo)`,
     `Depth: ${depth}`,
     `Location: ${e.lat.toFixed(3)}, ${e.lon.toFixed(3)}`,
     where,
+    felt,
     `Event: ${e.unid}`,
   ].join("\n")
 }
@@ -101,21 +108,35 @@ export async function pollAndAlert(opts: {
     try {
       if (await opts.dedupe.seen(e.unid)) continue
       result.newEvents += 1
+
+      // Felt-response escalation: fetch how many people reported feeling the
+      // event. A quake nobody noticed is different from one felt by hundreds.
+      // Disabled when feltEscalateAt is 0.
+      let feltCount: number | undefined
+      if (poll.feltEscalateAt > 0) {
+        try {
+          feltCount = await feltCountForEvent(e.unid, poll.regions === "all" ? undefined : unionBbox(poll.regions))
+        } catch {
+          feltCount = undefined // felt lookup must not block the base alert
+        }
+      }
+
       if (!poll.dryRun) {
         await publishNtfy(
           opts.ntfy,
           buildNtfyPayload({
             title: eventTitle(e),
-            message: eventMessage(e, e.regions),
+            // Prefix escalations so the felt severity is visible at a glance.
+            message: feltCount != null && feltCount >= poll.feltEscalateAt ? "⚠ HIGH FELT \n" + eventMessage(e, e.regions, feltCount) : eventMessage(e, e.regions, feltCount),
             tags: ["earthquake"],
-            priority: e.mag != null && e.mag >= 5 ? 4 : 3,
+            priority: e.mag != null && e.mag >= 5 || (feltCount != null && feltCount >= poll.feltEscalateAt) ? 4 : 3,
             click: `https://www.seismicportal.eu/realtime.html#${e.unid}`,
           }),
         )
       }
       await opts.dedupe.markSeen(e.unid)
       result.published += 1
-      result.events.push({ ...e, published: true })
+      result.events.push({ ...e, published: true, feltCount })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       result.failed += 1

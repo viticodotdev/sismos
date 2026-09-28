@@ -31,6 +31,16 @@ Selectable, defined in `src/regions.ts` (extend the catalog there):
 `all` is the pipeline-proving mode: on a quiet DR day it still fetches events
 from anywhere, so you can confirm fetch → filter → publish all work.
 
+## Felt reports (escalation)
+
+For each passing event the poller asks EMSC's Testimonies service how many
+people reported feeling it, and escalates the alert when people actually did:
+a M4.8 felt by 464 people is a different notification than one nobody noticed.
+An event with `ev_nbtestimonies >= FELT_ESCALATE_AT` gets a `⚠ HIGH FELT`
+banner and ntfy priority 4; the felt count is appended to the message as
+`Felt by: N people`. The felt lookup is best-effort — if it fails the base
+alert still goes out.
+
 ## API
 
 - `GET /health` — liveness.
@@ -39,6 +49,10 @@ from anywhere, so you can confirm fetch → filter → publish all work.
   - `minmag` — minimum magnitude (default: `MIN_MAGNITUDE` env, else 0)
   - `window` — how far back to query in minutes (default 5). Use a large window
     for a test sweep, e.g. `?region=all&window=120`.
+  - `felt` — felt-report escalation threshold (default: `FELT_ESCALATE_AT` env,
+    else 20). An event felt by at least this many people gets a high-priority
+    alert with a `⚠ HIGH FELT` banner. `1` is a good test value; `0` disables
+    the felt lookup.
 
 ## Config (env) — that's all there is
 
@@ -48,6 +62,7 @@ NTFY_TOPIC=earthquakes-dr
 NTFY_ACCESS_TOKEN=                        # optional; empty for anonymous publish
 REGIONS=dr                                # default regions on cron (or "all")
 MIN_MAGNITUDE=0                           # default floor
+FELT_ESCALATE_AT=20                       # escalate once felt by N people (0 = off)
 ```
 
 Exactly one trade, and it's deliberate: the default window (5 min) equals the

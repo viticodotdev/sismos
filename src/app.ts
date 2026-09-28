@@ -19,10 +19,19 @@ export async function runPollCycle(opts?: {
   region?: string
   minmag?: number
   window?: number
+  felt?: number
   dryRun?: boolean
 }): Promise<PollRun> {
   const dryRun = opts?.dryRun ?? false
   const pollConfig: Partial<PollConfig> = { dryRun }
+
+  // Felt-response escalation threshold (0 = disabled). URL ?felt= overrides env.
+  const feltRaw = opts?.felt ?? process.env.FELT_ESCALATE_AT
+  const feltEscalateAt = Number(feltRaw ?? 20)
+  if (!Number.isFinite(feltEscalateAt) || feltEscalateAt < 0) {
+    return { ok: false, status: 400, body: { error: `FELT_ESCALATE_AT must be a non-negative number, got: ${feltRaw}` } }
+  }
+  pollConfig.feltEscalateAt = feltEscalateAt
 
   if (opts?.window !== undefined) {
     if (!Number.isFinite(opts.window) || opts.window <= 0) {
@@ -56,13 +65,14 @@ export async function runPollCycle(opts?: {
       mode: pollConfig.regions === "all" ? "blanket" : "regions",
       regions: pollConfig.regions === "all" ? ["all"] : pollConfig.regions.map((r) => r.id),
       minMagnitude: pollConfig.minMagnitude,
+      feltEscalateAt: pollConfig.feltEscalateAt ?? 0,
       fetched: result.fetched,
       regionEvents: result.regionEvents,
       newEvents: result.newEvents,
       published: result.published,
       failed: result.failed,
       errors: result.errors,
-      events: result.events.map((e) => ({ unid: e.unid, mag: e.mag, region: e.flynn_region, published: e.published })),
+      events: result.events.map((e) => ({ unid: e.unid, mag: e.mag, region: e.flynn_region, published: e.published, feltCount: e.feltCount })),
     },
   }
 }
@@ -79,6 +89,7 @@ export function buildApp(opts?: { dryRun?: boolean }) {
           region: query.region,
           minmag: query.minmag !== undefined ? Number(query.minmag) : undefined,
           window: query.window !== undefined ? Number(query.window) : undefined,
+          felt: query.felt !== undefined ? Number(query.felt) : undefined,
           dryRun,
         })
         set.status = run.status
@@ -90,6 +101,7 @@ export function buildApp(opts?: { dryRun?: boolean }) {
           region: t.Optional(t.String()),
           minmag: t.Optional(t.String()),
           window: t.Optional(t.String()),
+          felt: t.Optional(t.String()),
         }),
       },
     )
