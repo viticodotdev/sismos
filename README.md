@@ -1,4 +1,4 @@
-# DR Seismic Alerts
+# Seismic Alerts
 
 Polls the EMSC realtime earthquake feed and pushes alerts to a self-hosted ntfy
 server for the regions you pick. Runs on Vercel (cron → serverless function →
@@ -30,7 +30,7 @@ Selectable, defined in `src/regions.ts` (extend the catalog there):
 | `caribbean` | Caribbean | 8–28, -90…-58 | (bbox only) |
 | `all` | **blanket** — every event globally, no filter | — | — |
 
-`all` is the pipeline-proving mode: on a quiet DR day it still fetches events
+`all` is the pipeline-proving mode: on a quiet day it still fetches events
 from anywhere, so you can confirm fetch → filter → publish all work.
 
 ## Two independent sources
@@ -78,7 +78,7 @@ are more than four fields.
 
 ```
 NTFY_BASE_URL=https://ntfy.example.com   # your ntfy server
-NTFY_TOPIC=earthquakes-dr
+NTFY_TOPIC=earthquakes
 NTFY_ACCESS_TOKEN=                        # optional; empty for anonymous publish
 REGIONS=dr                                # default regions on cron (or "all")
 MIN_MAGNITUDE=0                           # default floor
