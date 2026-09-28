@@ -4,17 +4,19 @@ Polls the EMSC realtime earthquake feed and pushes alerts to a self-hosted ntfy
 server for the regions you pick. Runs on Vercel (cron → serverless function →
 ntfy) with **no external state**: no Redis, no database, just env vars.
 
-## Why REST, not the websocket
+## Realtime source: websocket, not REST polling
 
-The EMSC live page is a **push-only websocket** (`wss://www.seismicportal.eu/standing_order/websocket`)
-that replays nothing on reconnect. You cannot "poll" it reliably from a
-serverless function — reconnecting misses events that fired while you were
-disconnected, and a serverless instance cannot hold a connection open. The
-**same event stream** is served by the FDSNWS REST API
-(`/fdsnws/event/1/query?format=json`), queryable by time window + bbox, with the
-same stable `unid` ids. So the poller queries REST over exactly one poll
-interval per tick (no overlap) and publishes each event once. No persistent
-connection, no missed-event replay problem.
+The EMSC live page serves a **push-only websocket**
+(`wss://www.seismicportal.eu/standing_order/websocket`) that delivers every
+event create/update/delete the moment EMSC indexes it. A persistent listener is
+the correct realtime source: the FDSNWS REST catalog lags the websocket by
+seconds-to-minutes, so a time-windowed REST poll can miss events entirely (the
+origin-time window slides past an event before the REST index picks it up).
+This service uses the websocket on self-host (a persistent container can hold
+the connection); it filters on arrival, never by window.
+
+The FDSNWS REST endpoint remains available as a bounded startup/watchdog
+catch-up, but it is not the realtime ingest path.
 
 ## Regions
 
@@ -37,8 +39,13 @@ The service treats the realtime feed and EMSC's felt reports as two separate
 sources of truth, each able to fire its own alert rather than one modifying the
 other.
 
-**Feed** — fires when a new quake happens in a region (occurrence). This is the
-REST poll that checks the origin-time window each tick.
+**Feed** — fires when a new quake happens in a region (occurrence). The primary
+path is a persistent EMSC standing-order **websocket listener** (`src/ws-feed.ts`)
+that pushes create/update frames the instant EMSC indexes them, filtering on
+arrival (region + magnitude) with no origin-time window — so an event can never
+slip past a poll. A magnitude revision of `>= UPDATE_ALERT_MAG_DELTA` (or one
+that crosses the magnitude floor) on an `update` frame also alerts. A bounded
+REST poll remains only as a watchdog/backstop (self-poll / `/api/cron`).
 
 **Felt** — fires on human response, which moves on its own:
 - *new felt event*: a quake people report feeling (`ev_nbtestimonies >= FELT_ALERT_AT`)
@@ -49,6 +56,10 @@ REST poll that checks the origin-time window each tick.
 The felt count is sent with ntfy priority 4 once it passes 50 reports. The felt
 lookup is best-effort; a failure never blocks the feed alert.
 
+All ntfy alerts (feed and felt) are sent as **markdown**: a bold key-fact title
+line, then labeled `Field: value` lines, with a `## Details` heading when there
+are more than four fields.
+
 ## API
 
 - `GET /health` — liveness.
@@ -57,10 +68,11 @@ lookup is best-effort; a failure never blocks the feed alert.
   - `minmag` — minimum magnitude (default: `MIN_MAGNITUDE` env, else 0)
   - `window` — how far back to query in minutes (default 5). Use a large window
     for a test sweep, e.g. `?region=all&window=120`.
-  - `felt` — felt-report escalation threshold (default: `FELT_ESCALATE_AT` env,
-    else 20). An event felt by at least this many people gets a high-priority
-    alert with a `⚠ HIGH FELT` banner. `1` is a good test value; `0` disables
-    the felt lookup.
+  - `felt-alert-at` — min felt reports to alert on a new felt event (env
+    `FELT_ALERT_AT`, default 5). 0 disables. Low values (1-3) are good for a
+    test run.
+  - `felt-jump-by` — felt-count climb that triggers a jump alert (env
+    `FELT_JUMP_BY`, default 15). 0 disables.
 
 ## Config (env) — that's all there is
 
@@ -70,17 +82,18 @@ NTFY_TOPIC=earthquakes-dr
 NTFY_ACCESS_TOKEN=                        # optional; empty for anonymous publish
 REGIONS=dr                                # default regions on cron (or "all")
 MIN_MAGNITUDE=0                           # default floor
-FELT_ALERT_AT=5                            # alert on a new felt event at >= N reports
-FELT_JUMP_BY=15                            # felt-count climb that triggers a jump alert
-FELT_COOLDOWN_MIN=30                       # min between repeat alerts for the same event
+FELT_ALERT_AT=5      # alert on a new felt event at >= N reports
+FELT_JUMP_BY=15      # felt-count climb that triggers a jump alert
+FELT_COOLDOWN_MIN=30 # min between repeat alerts for the same event
+WS_FEED=true         # realtime websocket feed (self-host)
+UPDATE_ALERT_MAG_DELTA=0.3 # revision alert on magnitude shift of at least this
 ```
 
-Exactly one trade, and it's deliberate: the default window (5 min) equals the
-cron interval, so each event belongs to exactly one poll and needs no storage
-to dedupe. A skipped or delayed cron tick can therefore miss an event. For a
-personal earthquake alert that is the right trade — if you later want
-miss-proofing, add a small store (Upstash Redis) and widen the window; the code
-keeps `unid` for that.
+The realtime path needs no external store: the websocket listener keeps an
+in-memory alerted-unid set and last-magnitude map, which survive reconnects
+within the long-lived self-host container. The REST backstop poll (self-poll or
+`/api/cron`) is windowed with no overlap, so it too runs stateless; a skipped
+tick there is acceptable since it is only a catch-up, not the primary path.
 
 ## Deploy
 

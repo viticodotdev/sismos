@@ -32,6 +32,24 @@ export function buildNtfyPayload(event: {
   })
 }
 
+export interface MarkdownField {
+  label: string
+  value: string
+}
+
+/**
+ * Build an ntfy message body in markdown: a bold title fact, then labeled
+ * content lines ("Label: value"). With more than `groupOver` fields the lines
+ * sit under a "## Details" heading so a long alert stays scannable. No plain
+ * newline text blocks.
+ */
+export function markdownMessage(titleFact: string, fields: MarkdownField[], groupOver = 4): string {
+  const lines = [`**${titleFact}**`]
+  if (fields.length > groupOver) lines.push("", "## Details")
+  lines.push("", ...fields.map((f) => `${f.label}: ${f.value}`))
+  return lines.join("\n")
+}
+
 export async function publishNtfy(cfg: NtfyConfig, body: string): Promise<void> {
   const url = `${cfg.baseUrl.replace(/\/+$/, "")}/${encodeURIComponent(cfg.topic)}`
   const headers: Record<string, string> = {

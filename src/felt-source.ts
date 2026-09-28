@@ -17,8 +17,8 @@
  * reliably on self-host — do not enable on a stateless deployment.
  */
 
-import type { NtfyConfig } from "./ntfy"
-import { buildNtfyPayload, publishNtfy } from "./ntfy"
+import type { MarkdownField, NtfyConfig } from "./ntfy"
+import { buildNtfyPayload, markdownMessage, publishNtfy } from "./ntfy"
 import { unionBbox, type RegionDef } from "./regions"
 
 const FELT_URL = "https://www.seismicportal.eu/testimonies-ws/api/search"
@@ -209,8 +209,14 @@ export async function runFeltSource(opts: {
 function feltMessage(a: FeltAlert): string {
   const mag = a.mag != null ? `M${a.mag.toFixed(1)}` : "no magnitude"
   const when = a.eventTime ? new Date(a.eventTime).toLocaleString("en-US", { timeZone: "America/Santo_Domingo", dateStyle: "medium", timeStyle: "short" }) : "unknown"
-  const lines = [`Reported felt: ${a.feltCount} people`, `Magnitude: ${mag}`, `Region: ${a.region}`, `Time: ${when}`]
-  if (a.kind === "jump") lines.push(`Climb: ${a.prevCount ?? "?"} → ${a.feltCount}`)
-  lines.push(`Event: ${a.unid}`)
-  return lines.join("\n")
+  const titleFact = a.kind === "jump" ? `Felt count climbing: ${a.prevCount ?? "?"} → ${a.feltCount}` : `Felt by ${a.feltCount} people`
+  const fields: MarkdownField[] = [
+    { label: "Reported felt", value: `${a.feltCount} people` },
+    { label: "Magnitude", value: mag },
+    { label: "Region", value: a.region },
+    { label: "Time", value: when },
+  ]
+  if (a.kind === "jump") fields.push({ label: "Climb", value: `${a.prevCount ?? "?"} → ${a.feltCount}` })
+  fields.push({ label: "Event", value: a.unid })
+  return markdownMessage(titleFact, fields)
 }

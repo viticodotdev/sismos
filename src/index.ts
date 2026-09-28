@@ -1,4 +1,7 @@
 import { buildApp, runPollCycle } from "./app"
+import { ntfyConfigFromEnv } from "./ntfy"
+import { resolveRegions } from "./regions"
+import { DEFAULT_UPDATE_ALERT_MAG_DELTA, createWsFeed } from "./ws-feed"
 
 const port = Number(process.env.PORT ?? 3000)
 // Local dev and self-host default to dry-run so a bare boot can never push to
@@ -30,4 +33,29 @@ if (process.env.SELF_POLL === "true") {
   setTimeout(tick, 3_000)
   setInterval(tick, intervalMin * 60_000)
   console.log(`self-poll every ${intervalMin} min (SELF_POLL=true)`)
+
+  // Real-time websocket feed — the primary feed source; the REST poll above is
+  // now a watchdog/backstop. Disable with WS_FEED=false.
+  if (process.env.WS_FEED !== "false") {
+    try {
+      const regions = resolveRegions(process.env.REGIONS)
+      const minMagnitude = Number(process.env.MIN_MAGNITUDE ?? 0)
+      const updateAlertMagDelta = Number(process.env.UPDATE_ALERT_MAG_DELTA ?? DEFAULT_UPDATE_ALERT_MAG_DELTA)
+      // Mirror runPollCycle: dry-run skips a real ntfy target (bare boots have
+      // no NTFY_* env and must still come up).
+      const ntfy = dryRun ? { baseUrl: "dryrun://", topic: "none", token: undefined } : ntfyConfigFromEnv(process.env)
+      const feed = createWsFeed({
+        regions,
+        minMagnitude: Number.isFinite(minMagnitude) ? minMagnitude : 0,
+        updateAlertMagDelta,
+        ntfy,
+        dryRun,
+        onError: (err: unknown) => console.error(`[ws-feed] ${err instanceof Error ? err.message : String(err)}`),
+      })
+      feed.start()
+      console.log(`ws-feed listening (regions=${process.env.REGIONS ?? "all"}, dryRun=${dryRun})`)
+    } catch (err) {
+      console.error(`[ws-feed] failed to start: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
 }
